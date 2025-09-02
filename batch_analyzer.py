@@ -1,5 +1,6 @@
 """
 Module pour analyser les bottoms en batch avec cache persistant
+Version corrigée pour la sérialisation JSON
 """
 
 import pandas as pd
@@ -30,13 +31,40 @@ class BatchExactTimeAnalyzer:
         """Sauvegarde le cache"""
         os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
         with open(self.cache_file, 'w') as f:
-            json.dump(self.cache, f)
+            json.dump(self.cache, f, default=str)  # Convertir automatiquement en string
     
     def get_cache_key(self, timestamp):
         """Génère une clé de cache pour un timestamp"""
         if isinstance(timestamp, pd.Timestamp):
             return timestamp.isoformat()
         return str(timestamp)
+    
+    def serialize_result(self, result):
+        """Convertit un résultat pour qu'il soit sérialisable en JSON"""
+        serialized = {}
+        for key, value in result.items():
+            if isinstance(value, pd.Timestamp):
+                serialized[key] = value.isoformat()
+            elif isinstance(value, datetime):
+                serialized[key] = value.isoformat()
+            elif pd.isna(value):
+                serialized[key] = None
+            else:
+                serialized[key] = value
+        return serialized
+    
+    def deserialize_result(self, result):
+        """Reconvertit un résultat depuis le format JSON"""
+        deserialized = {}
+        for key, value in result.items():
+            if key in ['exact_time', 'original_time', 'timestamp'] and value:
+                try:
+                    deserialized[key] = pd.Timestamp(value)
+                except:
+                    deserialized[key] = value
+            else:
+                deserialized[key] = value
+        return deserialized
     
     def analyze_batch(self, bottoms_df, batch_size=20, delay=1.0, progress_callback=None):
         """
@@ -62,7 +90,8 @@ class BatchExactTimeAnalyzer:
             
             # Vérifier le cache
             if cache_key in self.cache:
-                results.append(self.cache[cache_key])
+                cached_result = self.deserialize_result(self.cache[cache_key])
+                results.append(cached_result)
                 processed += 1
                 if progress_callback:
                     progress_callback(processed, total, f"Chargé depuis cache: {idx}")
@@ -85,21 +114,22 @@ class BatchExactTimeAnalyzer:
                     result['timestamp'] = idx
                     results.append(result)
                     
-                    # Mettre en cache
-                    self.cache[cache_key] = result
+                    # Sérialiser et mettre en cache
+                    serialized_result = self.serialize_result(result)
+                    self.cache[cache_key] = serialized_result
                     
                     # Sauvegarder périodiquement
                     if processed % 10 == 0:
                         self.save_cache()
                 else:
                     errors.append({
-                        'timestamp': idx,
+                        'timestamp': str(idx),
                         'error': 'No data returned'
                     })
                 
             except Exception as e:
                 errors.append({
-                    'timestamp': idx,
+                    'timestamp': str(idx),
                     'error': str(e)
                 })
             
@@ -132,13 +162,13 @@ class BatchExactTimeAnalyzer:
         
         if self.cache:
             # Taille du cache
-            cache_str = json.dumps(self.cache)
+            cache_str = json.dumps(self.cache, default=str)
             stats['cache_size_kb'] = len(cache_str.encode()) / 1024
             
             # Dates
             timestamps = list(self.cache.keys())
-            stats['oldest_entry'] = min(timestamps)
-            stats['newest_entry'] = max(timestamps)
+            stats['oldest_entry'] = min(timestamps) if timestamps else None
+            stats['newest_entry'] = max(timestamps) if timestamps else None
         
         return stats
     
@@ -151,7 +181,12 @@ class BatchExactTimeAnalyzer:
     def export_to_csv(self, filename='data/exact_times_export.csv'):
         """Exporte le cache vers CSV"""
         if self.cache:
-            df = pd.DataFrame.from_dict(self.cache, orient='index')
+            # Désérialiser les résultats pour le CSV
+            deserialized_data = {}
+            for key, value in self.cache.items():
+                deserialized_data[key] = self.deserialize_result(value)
+            
+            df = pd.DataFrame.from_dict(deserialized_data, orient='index')
             os.makedirs(os.path.dirname(filename), exist_ok=True)
             df.to_csv(filename)
             return filename
