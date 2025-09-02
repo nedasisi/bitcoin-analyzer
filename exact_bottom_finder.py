@@ -50,15 +50,23 @@ class ExactBottomFinder:
             print(f"Erreur récupération données 1m depuis Bitget: {e}")
             return None
     
-    def get_exact_bottom_time(self, bottom_time, hours_before=2, hours_after=2):
+    def get_exact_bottom_time(self, bottom_time=None, approximate_time=None, hours_before=2, hours_after=2):
         """
         Trouve l'heure exacte du bottom à la minute près
         
         Args:
-            bottom_time: datetime du bottom détecté sur 4H
+            bottom_time: datetime du bottom détecté sur 4H (legacy)
+            approximate_time: datetime du bottom détecté (nouveau nom)
             hours_before: heures à analyser avant le bottom
             hours_after: heures à analyser après le bottom
         """
+        # Support des deux noms d'arguments pour compatibilité
+        if approximate_time is not None:
+            bottom_time = approximate_time
+        
+        if bottom_time is None:
+            print("Erreur: Aucun temps de bottom fourni")
+            return None
         try:
             # Définir la période à analyser
             start_time = bottom_time - timedelta(hours=hours_before)
