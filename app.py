@@ -261,6 +261,46 @@ def main():
         if st.button("🔄 Actualiser", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
+        
+        # Section de gestion des données
+        st.markdown("---")
+        st.subheader("🗑️ Gestion des Données")
+        
+        # Afficher la période des données actuelles
+        if 'df' in locals() and df is not None and not df.empty:
+            data_start = df.index.min().strftime('%Y-%m-%d')
+            data_end = df.index.max().strftime('%Y-%m-%d')
+            st.info(f"📅 Données: {data_start} à {data_end}")
+        
+        # Bouton pour effacer le cache et recharger depuis 2010
+        if st.button("🚀 Charger TOUTES les données (depuis 2010)", use_container_width=True, type="primary"):
+            # Effacer tous les fichiers cache
+            import os
+            cache_files = [
+                "data/btc_history_4h.csv",
+                "data/btc_history_1h.csv",
+                "data/btc_history_1d.csv",
+                "data/btc_history_5m.csv",
+                "data/btc_history_15m.csv",
+                "data/btc_history_30m.csv",
+                "data/btc_history_2h.csv",
+                "data/btc_history.csv",
+                "data/exact_times_cache.json"
+            ]
+            
+            for cache_file in cache_files:
+                if os.path.exists(cache_file):
+                    try:
+                        os.remove(cache_file)
+                        st.success(f"✅ {cache_file} effacé")
+                    except:
+                        pass
+            
+            # Effacer le cache Streamlit
+            st.cache_data.clear()
+            st.success("🎆 Cache complètement effacé! L'application va redémarrer avec les données depuis 2010...")
+            time.sleep(2)
+            st.rerun()
     
     # Chargement des données
     df = load_data(selected_timeframe)
