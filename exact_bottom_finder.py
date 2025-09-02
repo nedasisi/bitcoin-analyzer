@@ -1,5 +1,6 @@
 """
 Module pour trouver l'heure exacte des bottoms en utilisant Bitget
+Version flexible qui accepte tous les paramètres possibles
 """
 
 import ccxt
@@ -50,17 +51,28 @@ class ExactBottomFinder:
             print(f"Erreur récupération données 1m depuis Bitget: {e}")
             return None
     
-    def get_exact_bottom_time(self, bottom_time=None, approximate_time=None, symbol='BTC/USDT', hours_before=2, hours_after=2):
+    def get_exact_bottom_time(self, bottom_time=None, approximate_time=None, **kwargs):
         """
         Trouve l'heure exacte du bottom à la minute près
+        Version flexible qui accepte plusieurs formats d'arguments
         
         Args:
             bottom_time: datetime du bottom détecté sur 4H (legacy)
             approximate_time: datetime du bottom détecté (nouveau nom)
-            symbol: symbole à analyser (default: BTC/USDT)
-            hours_before: heures à analyser avant le bottom
-            hours_after: heures à analyser après le bottom
+            **kwargs: Paramètres additionnels possibles:
+                - symbol: symbole à analyser (default: BTC/USDT)
+                - hours_before: heures à analyser avant le bottom (default: 2)
+                - hours_after: heures à analyser après le bottom (default: 2)
+                - window_hours: fenêtre totale en heures
+                - timeframe: timeframe d'origine (ignoré, pour compatibilité)
+                - exchange: exchange à utiliser (ignoré, toujours Bitget)
         """
+        # Extraire les paramètres des kwargs
+        symbol = kwargs.get('symbol', 'BTC/USDT')
+        hours_before = kwargs.get('hours_before', 2)
+        hours_after = kwargs.get('hours_after', 2)
+        window_hours = kwargs.get('window_hours', None)
+        
         # Support des deux noms d'arguments pour compatibilité
         if approximate_time is not None:
             bottom_time = approximate_time
@@ -68,6 +80,12 @@ class ExactBottomFinder:
         if bottom_time is None:
             print("Erreur: Aucun temps de bottom fourni")
             return None
+        
+        # Si window_hours est spécifié, l'utiliser pour définir before/after
+        if window_hours is not None:
+            hours_before = window_hours / 2
+            hours_after = window_hours / 2
+        
         try:
             # Définir la période à analyser
             start_time = bottom_time - timedelta(hours=hours_before)
@@ -87,12 +105,17 @@ class ExactBottomFinder:
             # Calculer quelques statistiques
             price_at_bottom_candle = df_1m[df_1m.index.floor('4H') == bottom_time.floor('4H')]['low'].min() if not df_1m[df_1m.index.floor('4H') == bottom_time.floor('4H')].empty else None
             
+            # Volume au moment du bottom
+            volume_at_bottom = df_1m.loc[min_idx, 'volume'] if 'volume' in df_1m.columns else None
+            
             result = {
                 'exact_time': min_idx,
                 'exact_price': min_price,
                 'original_time': bottom_time,
+                'original_price': price_at_bottom_candle,
                 'time_difference_minutes': (min_idx - bottom_time).total_seconds() / 60,
                 'price_at_4h_candle': price_at_bottom_candle,
+                'volume_at_bottom': volume_at_bottom,
                 'data_points': len(df_1m)
             }
             
@@ -102,16 +125,21 @@ class ExactBottomFinder:
             print(f"Erreur dans get_exact_bottom_time: {e}")
             return None
     
-    def analyze_bottom_precision(self, bottoms_list, max_bottoms=10):
+    def analyze_bottom_precision(self, bottoms_list, max_bottoms=10, **kwargs):
         """
         Analyse la précision temporelle d'une liste de bottoms
+        
+        Args:
+            bottoms_list: Liste des bottoms à analyser
+            max_bottoms: Nombre maximum de bottoms à analyser
+            **kwargs: Paramètres additionnels passés à get_exact_bottom_time
         """
         results = []
         
         for i, bottom_time in enumerate(bottoms_list[:max_bottoms]):
             print(f"Analyse bottom {i+1}/{min(len(bottoms_list), max_bottoms)}: {bottom_time}")
             
-            result = self.get_exact_bottom_time(bottom_time)
+            result = self.get_exact_bottom_time(bottom_time=bottom_time, **kwargs)
             if result:
                 results.append(result)
             
