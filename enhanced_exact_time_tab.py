@@ -189,10 +189,21 @@ def run_full_batch_analysis(bottoms_df, batch_size, delay, use_cache, selected_t
                 
                 # Convertir les timestamps au fuseau sélectionné
                 if selected_tz != 'UTC':
+                    # Vérifier si les timestamps ont déjà un timezone
                     results_df['exact_time'] = pd.to_datetime(results_df['exact_time'])
-                    results_df['exact_time'] = results_df['exact_time'].dt.tz_localize('UTC').dt.tz_convert(selected_tz)
                     results_df['timestamp'] = pd.to_datetime(results_df['timestamp'])
-                    results_df['timestamp'] = results_df['timestamp'].dt.tz_convert(selected_tz)
+                    
+                    # Si pas de timezone, localiser en UTC puis convertir
+                    if results_df['exact_time'].dt.tz is None:
+                        results_df['exact_time'] = results_df['exact_time'].dt.tz_localize('UTC').dt.tz_convert(selected_tz)
+                    else:
+                        # Si déjà un timezone, juste convertir
+                        results_df['exact_time'] = results_df['exact_time'].dt.tz_convert(selected_tz)
+                    
+                    if results_df['timestamp'].dt.tz is None:
+                        results_df['timestamp'] = results_df['timestamp'].dt.tz_localize('UTC').dt.tz_convert(selected_tz)
+                    else:
+                        results_df['timestamp'] = results_df['timestamp'].dt.tz_convert(selected_tz)
                 
                 # Préparer l'affichage
                 display_df = pd.DataFrame({
