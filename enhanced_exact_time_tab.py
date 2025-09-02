@@ -188,33 +188,76 @@ def run_full_batch_analysis(bottoms_df, batch_size, delay, use_cache, selected_t
                 st.success(f"✅ Analyse terminée! {len(results_df)} bottoms analysés avec succès.")
                 
                 # Convertir les timestamps au fuseau sélectionné
-                if selected_tz != 'UTC':
-                    # Vérifier si les timestamps ont déjà un timezone
-                    results_df['exact_time'] = pd.to_datetime(results_df['exact_time'])
-                    results_df['timestamp'] = pd.to_datetime(results_df['timestamp'])
-                    
-                    # Si pas de timezone, localiser en UTC puis convertir
-                    if results_df['exact_time'].dt.tz is None:
-                        results_df['exact_time'] = results_df['exact_time'].dt.tz_localize('UTC').dt.tz_convert(selected_tz)
-                    else:
-                        # Si déjà un timezone, juste convertir
-                        results_df['exact_time'] = results_df['exact_time'].dt.tz_convert(selected_tz)
-                    
-                    if results_df['timestamp'].dt.tz is None:
-                        results_df['timestamp'] = results_df['timestamp'].dt.tz_localize('UTC').dt.tz_convert(selected_tz)
-                    else:
-                        results_df['timestamp'] = results_df['timestamp'].dt.tz_convert(selected_tz)
+                try:
+                    if selected_tz != 'UTC':
+                        # Convertir exact_time
+                        if 'exact_time' in results_df.columns:
+                            # Essayer de convertir en datetime
+                            results_df['exact_time'] = pd.to_datetime(results_df['exact_time'], errors='coerce')
+                            # Vérifier si c'est bien une série datetime
+                            if pd.api.types.is_datetime64_any_dtype(results_df['exact_time']):
+                                if results_df['exact_time'].dt.tz is None:
+                                    results_df['exact_time'] = results_df['exact_time'].dt.tz_localize('UTC', nonexistent='shift_forward').dt.tz_convert(selected_tz)
+                                else:
+                                    results_df['exact_time'] = results_df['exact_time'].dt.tz_convert(selected_tz)
+                        
+                        # Convertir timestamp
+                        if 'timestamp' in results_df.columns:
+                            results_df['timestamp'] = pd.to_datetime(results_df['timestamp'], errors='coerce')
+                            if pd.api.types.is_datetime64_any_dtype(results_df['timestamp']):
+                                if results_df['timestamp'].dt.tz is None:
+                                    results_df['timestamp'] = results_df['timestamp'].dt.tz_localize('UTC', nonexistent='shift_forward').dt.tz_convert(selected_tz)
+                                else:
+                                    results_df['timestamp'] = results_df['timestamp'].dt.tz_convert(selected_tz)
+                except Exception as e:
+                    st.warning(f"Impossible de convertir les timezones: {e}")
+                    # Continuer sans conversion de timezone
                 
                 # Préparer l'affichage
-                display_df = pd.DataFrame({
-                    'Date': results_df['timestamp'].dt.strftime('%Y-%m-%d'),
-                    'Heure Bougie': results_df['timestamp'].dt.strftime('%H:%M'),
-                    'Heure Exacte': results_df['exact_time'].dt.strftime('%H:%M:%S'),
-                    'Écart (min)': ((results_df['exact_time'] - results_df['timestamp']).dt.total_seconds() / 60).round(),
-                    'Prix Original': results_df['original_price'].apply(lambda x: f"${x:,.0f}"),
-                    'Prix Exact': results_df['exact_price'].apply(lambda x: f"${x:,.0f}"),
-                    'Volume': results_df['volume_at_bottom'].apply(lambda x: f"{x:,.0f}")
-                })
+                display_data = []
+                for idx, row in results_df.iterrows():
+                    try:
+                        # Extraire les valeurs de manière sûre
+                        date_str = ''
+                        heure_str = ''
+                        heure_exacte_str = ''
+                        ecart = 0
+                        
+                        # Date et heure de la bougie
+                        if pd.notna(row.get('timestamp')):
+                            ts = pd.to_datetime(row['timestamp'], errors='coerce')
+                            if pd.notna(ts):
+                                date_str = ts.strftime('%Y-%m-%d')
+                                heure_str = ts.strftime('%H:%M')
+                        
+                        # Heure exacte
+                        if pd.notna(row.get('exact_time')):
+                            et = pd.to_datetime(row['exact_time'], errors='coerce')
+                            if pd.notna(et):
+                                heure_exacte_str = et.strftime('%H:%M:%S')
+                                # Calculer l'écart
+                                if pd.notna(ts):
+                                    ecart = round((et - ts).total_seconds() / 60)
+                        
+                        # Prix
+                        prix_original = f"${row.get('original_price', 0):,.0f}" if pd.notna(row.get('original_price')) else "N/A"
+                        prix_exact = f"${row.get('exact_price', 0):,.0f}" if pd.notna(row.get('exact_price')) else "N/A"
+                        volume = f"{row.get('volume_at_bottom', 0):,.0f}" if pd.notna(row.get('volume_at_bottom')) else "0"
+                        
+                        display_data.append({
+                            'Date': date_str,
+                            'Heure Bougie': heure_str,
+                            'Heure Exacte': heure_exacte_str,
+                            'Écart (min)': ecart,
+                            'Prix Original': prix_original,
+                            'Prix Exact': prix_exact,
+                            'Volume': volume
+                        })
+                    except Exception as e:
+                        st.warning(f"Erreur lors du formatage d'une ligne: {e}")
+                        continue
+                
+                display_df = pd.DataFrame(display_data)
                 
                 # Afficher le tableau
                 st.subheader("📊 Résultats Complets")
