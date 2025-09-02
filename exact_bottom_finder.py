@@ -1,6 +1,6 @@
 """
 Module pour trouver l'heure exacte des bottoms en utilisant Bitget
-Version flexible qui accepte tous les paramètres possibles
+Version avec gestion des données manquantes
 """
 
 import ccxt
@@ -18,10 +18,17 @@ class ExactBottomFinder:
                 'defaultType': 'spot'
             }
         })
+        # Date limite pour les données minute (Bitget n'a pas de données avant)
+        self.min_date_for_minute_data = datetime(2021, 1, 1)
         
     def get_minute_data(self, start_time, end_time, symbol='BTC/USDT'):
         """Récupère les données 1 minute depuis Bitget"""
         try:
+            # Vérifier si la date est trop ancienne
+            if start_time < self.min_date_for_minute_data:
+                print(f"Date trop ancienne pour données 1m: {start_time}")
+                return None
+                
             # Convertir en timestamps
             start_ts = int(start_time.timestamp() * 1000)
             end_ts = int(end_time.timestamp() * 1000)
@@ -33,6 +40,9 @@ class ExactBottomFinder:
                 since=start_ts,
                 limit=500  # Max 500 bougies
             )
+            
+            if not ohlcv:
+                return None
             
             # Convertir en DataFrame
             df = pd.DataFrame(
@@ -48,7 +58,7 @@ class ExactBottomFinder:
             return df
             
         except Exception as e:
-            print(f"Erreur récupération données 1m depuis Bitget: {e}")
+            print(f"Erreur récupération données 1m: {e}")
             return None
     
     def get_exact_bottom_time(self, bottom_time=None, approximate_time=None, **kwargs):
@@ -59,13 +69,7 @@ class ExactBottomFinder:
         Args:
             bottom_time: datetime du bottom détecté sur 4H (legacy)
             approximate_time: datetime du bottom détecté (nouveau nom)
-            **kwargs: Paramètres additionnels possibles:
-                - symbol: symbole à analyser (default: BTC/USDT)
-                - hours_before: heures à analyser avant le bottom (default: 2)
-                - hours_after: heures à analyser après le bottom (default: 2)
-                - window_hours: fenêtre totale en heures
-                - timeframe: timeframe d'origine (ignoré, pour compatibilité)
-                - exchange: exchange à utiliser (ignoré, toujours Bitget)
+            **kwargs: Paramètres additionnels possibles
         """
         # Extraire les paramètres des kwargs
         symbol = kwargs.get('symbol', 'BTC/USDT')
@@ -81,6 +85,21 @@ class ExactBottomFinder:
             print("Erreur: Aucun temps de bottom fourni")
             return None
         
+        # Vérifier si la date est trop ancienne
+        if pd.Timestamp(bottom_time).tz_localize(None) < self.min_date_for_minute_data:
+            # Pour les dates anciennes, retourner une estimation basée sur la bougie 4H
+            return {
+                'exact_time': bottom_time,
+                'exact_price': kwargs.get('price', 0),
+                'original_time': bottom_time,
+                'original_price': kwargs.get('price', 0),
+                'time_difference_minutes': 0,
+                'price_at_4h_candle': kwargs.get('price', 0),
+                'volume_at_bottom': 0,
+                'data_points': 0,
+                'note': 'Données 1m non disponibles pour cette date (trop ancienne)'
+            }
+        
         # Si window_hours est spécifié, l'utiliser pour définir before/after
         if window_hours is not None:
             hours_before = window_hours / 2
@@ -95,8 +114,18 @@ class ExactBottomFinder:
             df_1m = self.get_minute_data(start_time, end_time, symbol)
             
             if df_1m is None or df_1m.empty:
-                print(f"Pas de données 1m pour {bottom_time}")
-                return None
+                # Retourner les données de la bougie 4H comme fallback
+                return {
+                    'exact_time': bottom_time,
+                    'exact_price': kwargs.get('price', 0),
+                    'original_time': bottom_time,
+                    'original_price': kwargs.get('price', 0),
+                    'time_difference_minutes': 0,
+                    'price_at_4h_candle': kwargs.get('price', 0),
+                    'volume_at_bottom': 0,
+                    'data_points': 0,
+                    'note': 'Données 1m non disponibles'
+                }
             
             # Trouver le minimum
             min_idx = df_1m['low'].idxmin()
@@ -116,14 +145,26 @@ class ExactBottomFinder:
                 'time_difference_minutes': (min_idx - bottom_time).total_seconds() / 60,
                 'price_at_4h_candle': price_at_bottom_candle,
                 'volume_at_bottom': volume_at_bottom,
-                'data_points': len(df_1m)
+                'data_points': len(df_1m),
+                'note': 'OK'
             }
             
             return result
             
         except Exception as e:
             print(f"Erreur dans get_exact_bottom_time: {e}")
-            return None
+            # Retourner les données de base en cas d'erreur
+            return {
+                'exact_time': bottom_time,
+                'exact_price': kwargs.get('price', 0),
+                'original_time': bottom_time,
+                'original_price': kwargs.get('price', 0),
+                'time_difference_minutes': 0,
+                'price_at_4h_candle': kwargs.get('price', 0),
+                'volume_at_bottom': 0,
+                'data_points': 0,
+                'note': f'Erreur: {str(e)}'
+            }
     
     def analyze_bottom_precision(self, bottoms_list, max_bottoms=10, **kwargs):
         """
@@ -150,14 +191,29 @@ class ExactBottomFinder:
         if results:
             df_results = pd.DataFrame(results)
             
-            # Statistiques
-            stats = {
-                'mean_time_diff': df_results['time_difference_minutes'].mean(),
-                'median_time_diff': df_results['time_difference_minutes'].median(),
-                'std_time_diff': df_results['time_difference_minutes'].std(),
-                'max_time_diff': df_results['time_difference_minutes'].abs().max(),
-                'total_analyzed': len(results)
-            }
+            # Filtrer les résultats valides pour les statistiques
+            valid_results = df_results[df_results['data_points'] > 0]
+            
+            if not valid_results.empty:
+                stats = {
+                    'mean_time_diff': valid_results['time_difference_minutes'].mean(),
+                    'median_time_diff': valid_results['time_difference_minutes'].median(),
+                    'std_time_diff': valid_results['time_difference_minutes'].std(),
+                    'max_time_diff': valid_results['time_difference_minutes'].abs().max(),
+                    'total_analyzed': len(results),
+                    'valid_results': len(valid_results),
+                    'old_data_skipped': len(results) - len(valid_results)
+                }
+            else:
+                stats = {
+                    'mean_time_diff': 0,
+                    'median_time_diff': 0,
+                    'std_time_diff': 0,
+                    'max_time_diff': 0,
+                    'total_analyzed': len(results),
+                    'valid_results': 0,
+                    'old_data_skipped': len(results)
+                }
             
             return df_results, stats
         
