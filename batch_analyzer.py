@@ -1,6 +1,6 @@
 """
 Module pour analyser les bottoms en batch avec cache persistant
-Version corrigée pour la sérialisation JSON
+Version simplifiée sans problèmes de sérialisation JSON
 """
 
 import pandas as pd
@@ -28,57 +28,47 @@ class BatchExactTimeAnalyzer:
         return {}
     
     def save_cache(self):
-        """Sauvegarde le cache"""
-        os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
-        with open(self.cache_file, 'w') as f:
-            json.dump(self.cache, f, default=str)  # Convertir automatiquement en string
+        """Sauvegarde le cache - version simplifiée qui convertit tout en string"""
+        try:
+            os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+            
+            # Convertir tout le cache en format sérialisable
+            serializable_cache = {}
+            for key, value in self.cache.items():
+                # Convertir la clé en string
+                str_key = str(key)
+                
+                # Convertir la valeur
+                if isinstance(value, dict):
+                    serializable_value = {}
+                    for k, v in value.items():
+                        # Convertir chaque valeur en string ou type de base
+                        if hasattr(v, 'isoformat'):
+                            serializable_value[k] = v.isoformat()
+                        elif pd.isna(v) or v is None:
+                            serializable_value[k] = None
+                        else:
+                            serializable_value[k] = str(v)
+                    serializable_cache[str_key] = serializable_value
+                else:
+                    serializable_cache[str_key] = str(value)
+            
+            # Sauvegarder
+            with open(self.cache_file, 'w') as f:
+                json.dump(serializable_cache, f, indent=2)
+        except Exception as e:
+            print(f"Erreur lors de la sauvegarde du cache: {e}")
     
     def get_cache_key(self, timestamp):
         """Génère une clé de cache pour un timestamp"""
-        if isinstance(timestamp, pd.Timestamp):
+        if hasattr(timestamp, 'isoformat'):
             return timestamp.isoformat()
         return str(timestamp)
-    
-    def serialize_result(self, result):
-        """Convertit un résultat pour qu'il soit sérialisable en JSON"""
-        serialized = {}
-        for key, value in result.items():
-            if isinstance(value, pd.Timestamp):
-                serialized[key] = value.isoformat()
-            elif isinstance(value, datetime):
-                serialized[key] = value.isoformat()
-            elif pd.isna(value):
-                serialized[key] = None
-            else:
-                serialized[key] = value
-        return serialized
-    
-    def deserialize_result(self, result):
-        """Reconvertit un résultat depuis le format JSON"""
-        deserialized = {}
-        for key, value in result.items():
-            if key in ['exact_time', 'original_time', 'timestamp'] and value:
-                try:
-                    deserialized[key] = pd.Timestamp(value)
-                except:
-                    deserialized[key] = value
-            else:
-                deserialized[key] = value
-        return deserialized
     
     def analyze_batch(self, bottoms_df, batch_size=20, delay=1.0, progress_callback=None):
         """
         Analyse un batch de bottoms avec gestion du cache
-        
-        Args:
-            bottoms_df: DataFrame avec les bottoms
-            batch_size: Taille des batches
-            delay: Délai entre requêtes (secondes)
-            progress_callback: Fonction callback(processed, total, message)
-        
-        Returns:
-            results_df: DataFrame avec les résultats
-            errors: Liste des erreurs
+        Version simplifiée qui évite les problèmes de sérialisation
         """
         results = []
         errors = []
@@ -90,8 +80,20 @@ class BatchExactTimeAnalyzer:
             
             # Vérifier le cache
             if cache_key in self.cache:
-                cached_result = self.deserialize_result(self.cache[cache_key])
-                results.append(cached_result)
+                # Utiliser les données du cache
+                cached = self.cache[cache_key]
+                # Reconstruire le résultat
+                result = {
+                    'timestamp': idx,
+                    'exact_time': cached.get('exact_time', idx),
+                    'exact_price': float(cached.get('exact_price', 0)) if cached.get('exact_price') else 0,
+                    'original_price': float(cached.get('original_price', 0)) if cached.get('original_price') else 0,
+                    'time_difference_minutes': float(cached.get('time_difference_minutes', 0)) if cached.get('time_difference_minutes') else 0,
+                    'volume_at_bottom': float(cached.get('volume_at_bottom', 0)) if cached.get('volume_at_bottom') else 0,
+                    'data_points': int(cached.get('data_points', 0)) if cached.get('data_points') else 0,
+                    'note': cached.get('note', '')
+                }
+                results.append(result)
                 processed += 1
                 if progress_callback:
                     progress_callback(processed, total, f"Chargé depuis cache: {idx}")
@@ -102,7 +104,7 @@ class BatchExactTimeAnalyzer:
                 # Passer le prix si disponible
                 kwargs = {}
                 if 'price' in row:
-                    kwargs['price'] = row['price']
+                    kwargs['price'] = float(row['price'])
                 
                 result = self.finder.get_exact_bottom_time(
                     bottom_time=idx,
@@ -114,9 +116,17 @@ class BatchExactTimeAnalyzer:
                     result['timestamp'] = idx
                     results.append(result)
                     
-                    # Sérialiser et mettre en cache
-                    serialized_result = self.serialize_result(result)
-                    self.cache[cache_key] = serialized_result
+                    # Créer une version sérialisable pour le cache
+                    cache_entry = {
+                        'exact_time': str(result.get('exact_time', '')),
+                        'exact_price': float(result.get('exact_price', 0)),
+                        'original_price': float(result.get('original_price', 0)),
+                        'time_difference_minutes': float(result.get('time_difference_minutes', 0)),
+                        'volume_at_bottom': float(result.get('volume_at_bottom', 0)),
+                        'data_points': int(result.get('data_points', 0)),
+                        'note': str(result.get('note', ''))
+                    }
+                    self.cache[cache_key] = cache_entry
                     
                     # Sauvegarder périodiquement
                     if processed % 10 == 0:
@@ -128,6 +138,7 @@ class BatchExactTimeAnalyzer:
                     })
                 
             except Exception as e:
+                print(f"Erreur lors de l'analyse de {idx}: {e}")
                 errors.append({
                     'timestamp': str(idx),
                     'error': str(e)
@@ -142,7 +153,10 @@ class BatchExactTimeAnalyzer:
                 time.sleep(delay)
         
         # Sauvegarder le cache final
-        self.save_cache()
+        try:
+            self.save_cache()
+        except Exception as e:
+            print(f"Erreur lors de la sauvegarde finale du cache: {e}")
         
         # Créer DataFrame des résultats
         if results:
@@ -161,33 +175,46 @@ class BatchExactTimeAnalyzer:
         }
         
         if self.cache:
-            # Taille du cache
-            cache_str = json.dumps(self.cache, default=str)
-            stats['cache_size_kb'] = len(cache_str.encode()) / 1024
-            
-            # Dates
-            timestamps = list(self.cache.keys())
-            stats['oldest_entry'] = min(timestamps) if timestamps else None
-            stats['newest_entry'] = max(timestamps) if timestamps else None
+            try:
+                # Taille approximative
+                cache_str = str(self.cache)
+                stats['cache_size_kb'] = len(cache_str.encode()) / 1024
+                
+                # Dates
+                timestamps = list(self.cache.keys())
+                if timestamps:
+                    stats['oldest_entry'] = min(timestamps)
+                    stats['newest_entry'] = max(timestamps)
+            except:
+                pass
         
         return stats
     
     def clear_cache(self):
         """Efface le cache"""
         self.cache = {}
-        if os.path.exists(self.cache_file):
-            os.remove(self.cache_file)
+        try:
+            if os.path.exists(self.cache_file):
+                os.remove(self.cache_file)
+        except Exception as e:
+            print(f"Erreur lors de la suppression du cache: {e}")
     
     def export_to_csv(self, filename='data/exact_times_export.csv'):
         """Exporte le cache vers CSV"""
         if self.cache:
-            # Désérialiser les résultats pour le CSV
-            deserialized_data = {}
-            for key, value in self.cache.items():
-                deserialized_data[key] = self.deserialize_result(value)
-            
-            df = pd.DataFrame.from_dict(deserialized_data, orient='index')
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            df.to_csv(filename)
-            return filename
+            try:
+                # Créer une liste de dictionnaires pour le DataFrame
+                data = []
+                for key, value in self.cache.items():
+                    row = {'cache_key': key}
+                    row.update(value)
+                    data.append(row)
+                
+                df = pd.DataFrame(data)
+                os.makedirs(os.path.dirname(filename), exist_ok=True)
+                df.to_csv(filename, index=False)
+                return filename
+            except Exception as e:
+                print(f"Erreur lors de l'export CSV: {e}")
+                return None
         return None
