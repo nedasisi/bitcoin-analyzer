@@ -18,7 +18,7 @@ class ExactBottomFinder:
             }
         })
         
-    def get_minute_data(self, start_time, end_time):
+    def get_minute_data(self, start_time, end_time, symbol='BTC/USDT'):
         """Récupère les données 1 minute depuis Bitget"""
         try:
             # Convertir en timestamps
@@ -27,7 +27,7 @@ class ExactBottomFinder:
             
             # Récupérer données 1m
             ohlcv = self.exchange.fetch_ohlcv(
-                symbol='BTC/USDT',
+                symbol=symbol,
                 timeframe='1m',
                 since=start_ts,
                 limit=500  # Max 500 bougies
@@ -50,13 +50,14 @@ class ExactBottomFinder:
             print(f"Erreur récupération données 1m depuis Bitget: {e}")
             return None
     
-    def get_exact_bottom_time(self, bottom_time=None, approximate_time=None, hours_before=2, hours_after=2):
+    def get_exact_bottom_time(self, bottom_time=None, approximate_time=None, symbol='BTC/USDT', hours_before=2, hours_after=2):
         """
         Trouve l'heure exacte du bottom à la minute près
         
         Args:
             bottom_time: datetime du bottom détecté sur 4H (legacy)
             approximate_time: datetime du bottom détecté (nouveau nom)
+            symbol: symbole à analyser (default: BTC/USDT)
             hours_before: heures à analyser avant le bottom
             hours_after: heures à analyser après le bottom
         """
@@ -73,7 +74,7 @@ class ExactBottomFinder:
             end_time = bottom_time + timedelta(hours=hours_after)
             
             # Récupérer les données 1 minute
-            df_1m = self.get_minute_data(start_time, end_time)
+            df_1m = self.get_minute_data(start_time, end_time, symbol)
             
             if df_1m is None or df_1m.empty:
                 print(f"Pas de données 1m pour {bottom_time}")
