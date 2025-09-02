@@ -19,6 +19,14 @@ def display_exact_time_tab_with_full_analysis(bottoms_tz, selected_tz, selected_
     
     st.header("🎯 Calcul de l'Heure Exacte des Bottoms (Précision 1 minute)")
     
+    # Message d'information sur les limitations
+    st.info("""
+    ⚠️ **Note importante sur les données**:
+    - **Bitget a des données minute à partir de 2021** uniquement
+    - **Pour les bottoms avant 2021**: L'heure exacte ne peut pas être calculée (affichage "N/A")
+    - **Pour les bottoms après 2021**: Calcul précis à la minute près disponible
+    """)
+    
     # Tabs pour différents modes
     mode_tab1, mode_tab2, mode_tab3 = st.tabs([
         "⚡ Analyse Rapide (1-20 bottoms)",
@@ -233,11 +241,17 @@ def run_full_batch_analysis(bottoms_df, batch_size, delay, use_cache, selected_t
                         # Heure exacte
                         if pd.notna(row.get('exact_time')):
                             et = pd.to_datetime(row['exact_time'], errors='coerce')
-                            if pd.notna(et):
-                                heure_exacte_str = et.strftime('%H:%M:%S')
-                                # Calculer l'écart
-                                if pd.notna(ts):
+                            if pd.notna(et) and pd.notna(ts):
+                                # Vérifier si on a vraiment des données précises
+                                if row.get('data_points', 0) > 0:
+                                    heure_exacte_str = et.strftime('%H:%M:%S')
                                     ecart = round((et - ts).total_seconds() / 60)
+                                else:
+                                    # Pas de données 1m disponibles
+                                    heure_exacte_str = "N/A (pas de données 1m)"
+                                    ecart = 0
+                        else:
+                            heure_exacte_str = "N/A"
                         
                         # Prix
                         prix_original = f"${row.get('original_price', 0):,.0f}" if pd.notna(row.get('original_price')) else "N/A"
@@ -270,17 +284,23 @@ def run_full_batch_analysis(bottoms_df, batch_size, delay, use_cache, selected_t
                 # Statistiques globales
                 st.subheader("📈 Statistiques Globales")
                 
+                # Compter les résultats avec données précises
+                with_data = sum(1 for _, row in results_df.iterrows() if row.get('data_points', 0) > 0)
+                without_data = len(results_df) - with_data
+                
                 col1, col2, col3, col4 = st.columns(4)
                 
-                ecarts = display_df['Écart (min)'].abs()
-                
                 with col1:
-                    st.metric("Écart Moyen", f"{ecarts.mean():.0f} min")
+                    st.metric("Avec données 1m", f"{with_data}/{len(results_df)}")
                 with col2:
-                    st.metric("Écart Médian", f"{ecarts.median():.0f} min")
+                    st.metric("Sans données 1m", f"{without_data}/{len(results_df)}")
                 with col3:
-                    precision_30 = (ecarts < 30).sum() / len(ecarts) * 100
-                    st.metric("Précision <30min", f"{precision_30:.0f}%")
+                    # Calculer l'écart seulement pour ceux avec données
+                    valid_ecarts = [abs(row.get('Écart (min)', 0)) for _, row in display_df.iterrows() if "N/A" not in str(row.get('Heure Exacte', ''))]
+                    if valid_ecarts:
+                        st.metric("Écart Moyen (avec données)", f"{sum(valid_ecarts)/len(valid_ecarts):.0f} min")
+                    else:
+                        st.metric("Écart Moyen", "N/A")
                 with col4:
                     st.metric("Taux de succès", f"{len(results_df)/len(bottoms_df)*100:.1f}%")
                 

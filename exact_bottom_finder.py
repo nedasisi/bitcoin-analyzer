@@ -1,6 +1,6 @@
 """
-Module pour trouver l'heure exacte des bottoms en utilisant Bitget
-Version avec gestion des données manquantes
+Module pour trouver l'heure exacte des bottoms en utilisant plusieurs exchanges
+Version multi-exchange pour maximiser la couverture de données
 """
 
 import ccxt
@@ -11,73 +11,117 @@ import time
 
 class ExactBottomFinder:
     def __init__(self):
-        """Initialise la connexion à Bitget uniquement"""
-        self.exchange = ccxt.bitget({
-            'enableRateLimit': True,
-            'options': {
-                'defaultType': 'spot'
-            }
-        })
-        # Date limite pour les données minute (Bitget n'a pas de données avant)
-        self.min_date_for_minute_data = datetime(2021, 1, 1)
+        """Initialise plusieurs exchanges pour maximiser la disponibilité des données"""
+        self.exchanges = {}
+        self.init_exchanges()
+        
+    def init_exchanges(self):
+        """Initialise plusieurs exchanges en fallback"""
+        # Bitget (principal pour Streamlit Cloud)
+        try:
+            self.exchanges['bitget'] = ccxt.bitget({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            })
+        except:
+            pass
+            
+        # KuCoin (bon historique)
+        try:
+            self.exchanges['kucoin'] = ccxt.kucoin({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            })
+        except:
+            pass
+            
+        # Bybit (données historiques)
+        try:
+            self.exchanges['bybit'] = ccxt.bybit({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            })
+        except:
+            pass
+            
+        # Gate.io (bon historique aussi)
+        try:
+            self.exchanges['gateio'] = ccxt.gateio({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            })
+        except:
+            pass
+        
+        # Date limite estimée pour chaque exchange
+        self.min_dates = {
+            'bitget': datetime(2021, 1, 1),
+            'kucoin': datetime(2019, 1, 1),
+            'bybit': datetime(2020, 1, 1),
+            'gateio': datetime(2018, 1, 1)
+        }
         
     def get_minute_data(self, start_time, end_time, symbol='BTC/USDT'):
-        """Récupère les données 1 minute depuis Bitget"""
-        try:
-            # Vérifier si la date est trop ancienne
-            if start_time < self.min_date_for_minute_data:
-                print(f"Date trop ancienne pour données 1m: {start_time}")
-                return None
+        """Récupère les données 1 minute depuis le premier exchange disponible"""
+        
+        # Essayer chaque exchange
+        for name, exchange in self.exchanges.items():
+            if not exchange:
+                continue
                 
-            # Convertir en timestamps
-            start_ts = int(start_time.timestamp() * 1000)
-            end_ts = int(end_time.timestamp() * 1000)
-            
-            # Récupérer données 1m
-            ohlcv = self.exchange.fetch_ohlcv(
-                symbol=symbol,
-                timeframe='1m',
-                since=start_ts,
-                limit=500  # Max 500 bougies
-            )
-            
-            if not ohlcv:
-                return None
-            
-            # Convertir en DataFrame
-            df = pd.DataFrame(
-                ohlcv,
-                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
-            )
-            df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('datetime', inplace=True)
-            
-            # Filtrer pour la période exacte
-            df = df[(df.index >= start_time) & (df.index <= end_time)]
-            
-            return df
-            
-        except Exception as e:
-            print(f"Erreur récupération données 1m: {e}")
-            return None
+            # Vérifier si l'exchange a probablement des données pour cette période
+            min_date = self.min_dates.get(name, datetime(2021, 1, 1))
+            if start_time < min_date:
+                continue
+                
+            try:
+                print(f"Essai avec {name}...")
+                
+                # Convertir en timestamps
+                start_ts = int(start_time.timestamp() * 1000)
+                
+                # Récupérer données 1m
+                ohlcv = exchange.fetch_ohlcv(
+                    symbol=symbol,
+                    timeframe='1m',
+                    since=start_ts,
+                    limit=500  # Max 500 bougies
+                )
+                
+                if ohlcv and len(ohlcv) > 0:
+                    # Convertir en DataFrame
+                    df = pd.DataFrame(
+                        ohlcv,
+                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                    )
+                    df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    df.set_index('datetime', inplace=True)
+                    
+                    # Filtrer pour la période exacte
+                    df = df[(df.index >= start_time) & (df.index <= end_time)]
+                    
+                    if not df.empty:
+                        print(f"✅ Données trouvées sur {name}: {len(df)} points")
+                        return df, name
+                        
+            except Exception as e:
+                print(f"Erreur avec {name}: {e}")
+                continue
+        
+        return None, None
     
     def get_exact_bottom_time(self, bottom_time=None, approximate_time=None, **kwargs):
         """
         Trouve l'heure exacte du bottom à la minute près
-        Version flexible qui accepte plusieurs formats d'arguments
-        
-        Args:
-            bottom_time: datetime du bottom détecté sur 4H (legacy)
-            approximate_time: datetime du bottom détecté (nouveau nom)
-            **kwargs: Paramètres additionnels possibles
+        Version multi-exchange
         """
-        # Extraire les paramètres des kwargs
+        # Extraire les paramètres
         symbol = kwargs.get('symbol', 'BTC/USDT')
         hours_before = kwargs.get('hours_before', 2)
         hours_after = kwargs.get('hours_after', 2)
         window_hours = kwargs.get('window_hours', None)
         
-        # Support des deux noms d'arguments pour compatibilité
+        # Support des deux noms d'arguments
         if approximate_time is not None:
             bottom_time = approximate_time
         
@@ -85,22 +129,7 @@ class ExactBottomFinder:
             print("Erreur: Aucun temps de bottom fourni")
             return None
         
-        # Vérifier si la date est trop ancienne
-        if pd.Timestamp(bottom_time).tz_localize(None) < self.min_date_for_minute_data:
-            # Pour les dates anciennes, retourner une estimation basée sur la bougie 4H
-            return {
-                'exact_time': bottom_time,
-                'exact_price': kwargs.get('price', 0),
-                'original_time': bottom_time,
-                'original_price': kwargs.get('price', 0),
-                'time_difference_minutes': 0,
-                'price_at_4h_candle': kwargs.get('price', 0),
-                'volume_at_bottom': 0,
-                'data_points': 0,
-                'note': 'Données 1m non disponibles pour cette date (trop ancienne)'
-            }
-        
-        # Si window_hours est spécifié, l'utiliser pour définir before/after
+        # Si window_hours est spécifié
         if window_hours is not None:
             hours_before = window_hours / 2
             hours_after = window_hours / 2
@@ -110,8 +139,8 @@ class ExactBottomFinder:
             start_time = bottom_time - timedelta(hours=hours_before)
             end_time = bottom_time + timedelta(hours=hours_after)
             
-            # Récupérer les données 1 minute
-            df_1m = self.get_minute_data(start_time, end_time, symbol)
+            # Récupérer les données 1 minute depuis n'importe quel exchange
+            df_1m, exchange_used = self.get_minute_data(start_time, end_time, symbol)
             
             if df_1m is None or df_1m.empty:
                 # Retourner les données de la bougie 4H comme fallback
@@ -124,7 +153,8 @@ class ExactBottomFinder:
                     'price_at_4h_candle': kwargs.get('price', 0),
                     'volume_at_bottom': 0,
                     'data_points': 0,
-                    'note': 'Données 1m non disponibles'
+                    'exchange_used': 'none',
+                    'note': 'Pas de données 1m disponibles'
                 }
             
             # Trouver le minimum
@@ -146,7 +176,8 @@ class ExactBottomFinder:
                 'price_at_4h_candle': price_at_bottom_candle,
                 'volume_at_bottom': volume_at_bottom,
                 'data_points': len(df_1m),
-                'note': 'OK'
+                'exchange_used': exchange_used,
+                'note': f'OK - Données de {exchange_used}'
             }
             
             return result
@@ -163,19 +194,16 @@ class ExactBottomFinder:
                 'price_at_4h_candle': kwargs.get('price', 0),
                 'volume_at_bottom': 0,
                 'data_points': 0,
+                'exchange_used': 'error',
                 'note': f'Erreur: {str(e)}'
             }
     
     def analyze_bottom_precision(self, bottoms_list, max_bottoms=10, **kwargs):
         """
         Analyse la précision temporelle d'une liste de bottoms
-        
-        Args:
-            bottoms_list: Liste des bottoms à analyser
-            max_bottoms: Nombre maximum de bottoms à analyser
-            **kwargs: Paramètres additionnels passés à get_exact_bottom_time
         """
         results = []
+        exchanges_used = {}
         
         for i, bottom_time in enumerate(bottoms_list[:max_bottoms]):
             print(f"Analyse bottom {i+1}/{min(len(bottoms_list), max_bottoms)}: {bottom_time}")
@@ -183,6 +211,9 @@ class ExactBottomFinder:
             result = self.get_exact_bottom_time(bottom_time=bottom_time, **kwargs)
             if result:
                 results.append(result)
+                # Compter quel exchange a été utilisé
+                exchange = result.get('exchange_used', 'none')
+                exchanges_used[exchange] = exchanges_used.get(exchange, 0) + 1
             
             # Pause pour respecter les limites
             time.sleep(0.5)
@@ -202,7 +233,8 @@ class ExactBottomFinder:
                     'max_time_diff': valid_results['time_difference_minutes'].abs().max(),
                     'total_analyzed': len(results),
                     'valid_results': len(valid_results),
-                    'old_data_skipped': len(results) - len(valid_results)
+                    'old_data_skipped': len(results) - len(valid_results),
+                    'exchanges_used': exchanges_used
                 }
             else:
                 stats = {
@@ -212,7 +244,8 @@ class ExactBottomFinder:
                     'max_time_diff': 0,
                     'total_analyzed': len(results),
                     'valid_results': 0,
-                    'old_data_skipped': len(results)
+                    'old_data_skipped': len(results),
+                    'exchanges_used': exchanges_used
                 }
             
             return df_results, stats
