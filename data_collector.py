@@ -1,93 +1,137 @@
 """
-Module de collecte de données depuis Bitget UNIQUEMENT
+Module de collecte de données depuis CryptoCompare pour l'historique complet
 """
 
-import ccxt
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import time
 import os
+import requests
 from config import *
 
 class DataCollector:
     def __init__(self, timeframe=None):
         """Initialise le collecteur de données"""
-        self.exchange = None
         self.timeframe = timeframe or TIMEFRAME
-        self.init_exchange()
+        self.api_base = "https://min-api.cryptocompare.com/data"
         
-    def init_exchange(self):
-        """Initialise la connexion à Bitget UNIQUEMENT"""
-        try:
-            # UNIQUEMENT Bitget - pas de Binance
-            self.exchange = ccxt.bitget({
-                'enableRateLimit': True,
-                'options': {
-                    'defaultType': 'spot',  # Pour le spot trading
-                }
-            })
-            print("✅ Connecté à Bitget")
-        except Exception as e:
-            print(f"Erreur connexion Bitget: {e}")
-            # Pas de fallback - on utilise que Bitget
-            self.exchange = None
-    
-    def fetch_ohlcv_data(self, symbol='BTC/USDT', timeframe=None, since=None, limit=500):
+    def fetch_ohlcv_data(self, symbol='BTC', timeframe=None, since=None, limit=2000):
         """
-        Récupère les données OHLCV depuis Bitget
+        Récupère les données OHLCV depuis CryptoCompare
         """
-        if not self.exchange:
-            print("❌ Exchange non initialisé")
-            return None
-            
         if timeframe is None:
             timeframe = self.timeframe
+            
         try:
-            if since is None:
-                since = int(datetime.strptime(START_DATE, "%Y-%m-%d").timestamp() * 1000)
+            # Mapper les timeframes vers les endpoints CryptoCompare
+            endpoint_map = {
+                '1m': 'histominute',
+                '5m': 'histominute',
+                '15m': 'histominute', 
+                '30m': 'histominute',
+                '1h': 'histohour',
+                '2h': 'histohour',
+                '4h': 'histohour',
+                '1d': 'histoday'
+            }
+            
+            # Calculer l'agrégation nécessaire
+            aggregate_map = {
+                '1m': 1,
+                '5m': 5,
+                '15m': 15,
+                '30m': 30,
+                '1h': 1,
+                '2h': 2,
+                '4h': 4,
+                '1d': 1
+            }
+            
+            endpoint = endpoint_map.get(timeframe, 'histohour')
+            aggregate = aggregate_map.get(timeframe, 1)
+            
+            # Calculer le timestamp de fin (maintenant)
+            to_ts = int(datetime.now().timestamp())
+            
+            # URL de l'API
+            url = f"{self.api_base}/v2/{endpoint}"
             
             all_data = []
             
+            # CryptoCompare limite à 2000 points par requête
+            # Pour obtenir tout l'historique, on fait plusieurs requêtes
             while True:
-                try:
-                    # Récupérer les données par batch
-                    ohlcv = self.exchange.fetch_ohlcv(
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        since=since,
-                        limit=limit
-                    )
+                params = {
+                    'fsym': symbol,
+                    'tsym': 'USD',
+                    'limit': 2000,
+                    'toTs': to_ts,
+                    'aggregate': aggregate
+                }
+                
+                response = requests.get(url, params=params)
+                
+                if response.status_code == 200:
+                    data = response.json()
                     
-                    if not ohlcv:
+                    if data.get('Response') == 'Success' and data.get('Data', {}).get('Data'):
+                        ohlcv_data = data['Data']['Data']
+                        
+                        # Ajouter les données
+                        all_data = ohlcv_data + all_data
+                        
+                        # Si on a atteint la date de début souhaitée
+                        if since:
+                            first_timestamp = ohlcv_data[0]['time'] * 1000
+                            if first_timestamp <= since:
+                                break
+                        
+                        # Préparer pour la prochaine requête
+                        to_ts = ohlcv_data[0]['time'] - 1
+                        
+                        # Si on remonte avant 2010, arrêter
+                        if to_ts < int(datetime(2010, 1, 1).timestamp()):
+                            break
+                        
+                        # Limite de sécurité
+                        if len(all_data) > 100000:  # ~11 ans de données 4H
+                            break
+                        
+                        # Pause pour éviter le rate limiting
+                        time.sleep(0.2)
+                    else:
                         break
-                    
-                    all_data.extend(ohlcv)
-                    
-                    # Mise à jour du timestamp pour la prochaine requête
-                    since = ohlcv[-1][0] + 1
-                    
-                    # Si on arrive à aujourd'hui, on arrête
-                    if since > int(datetime.now().timestamp() * 1000):
-                        break
-                    
-                    # Pause pour respecter rate limit
-                    time.sleep(self.exchange.rateLimit / 1000)
-                    
-                except Exception as e:
-                    print(f"Erreur fetch batch: {e}")
+                else:
+                    print(f"Erreur API CryptoCompare: {response.status_code}")
                     break
             
             # Convertir en DataFrame
-            df = pd.DataFrame(all_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            
-            return df
+            if all_data:
+                df = pd.DataFrame(all_data)
+                
+                # Renommer les colonnes
+                df = df.rename(columns={
+                    'time': 'timestamp',
+                    'volumefrom': 'volume'
+                })
+                
+                # Convertir timestamp en datetime
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+                df.set_index('timestamp', inplace=True)
+                
+                # Filtrer depuis la date de début
+                if since:
+                    start_date = pd.to_datetime(since, unit='ms')
+                    df = df[df.index >= start_date]
+                
+                print(f"✅ {len(df)} bougies récupérées depuis CryptoCompare")
+                return df
             
         except Exception as e:
             print(f"Erreur fetch_ohlcv_data: {e}")
-            return None
+            
+        return None
     
     def get_historical_data(self, use_cache=USE_CACHE):
         """
@@ -115,9 +159,9 @@ class DataCollector:
                 else:
                     print(f"📊 Cache expiré, mise à jour...")
                     # Récupérer seulement les nouvelles données
-                    new_data = self.fetch_ohlcv_data(
-                        since=int(last_update.timestamp() * 1000)
-                    )
+                    since_ts = int(last_update.timestamp() * 1000)
+                    new_data = self.fetch_ohlcv_data(since=since_ts)
+                    
                     if new_data is not None and not new_data.empty:
                         df = pd.concat([df, new_data]).drop_duplicates()
                         df.sort_index(inplace=True)
@@ -128,8 +172,12 @@ class DataCollector:
                 print(f"Erreur lecture cache: {e}")
         
         # Pas de cache ou erreur : récupérer toutes les données
-        print("📥 Téléchargement des données historiques depuis Bitget...")
-        df = self.fetch_ohlcv_data()
+        print("📥 Téléchargement des données historiques depuis CryptoCompare...")
+        
+        # Convertir la date de début en timestamp
+        since_ts = int(datetime.strptime(START_DATE, "%Y-%m-%d").timestamp() * 1000)
+        
+        df = self.fetch_ohlcv_data(since=since_ts)
         
         if df is not None and not df.empty:
             # Sauvegarder en cache
@@ -142,27 +190,34 @@ class DataCollector:
         """
         Ajoute les indicateurs techniques
         """
-        import ta
-        
-        # RSI
-        df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
-        
-        # Moyennes mobiles
-        df['sma_20'] = ta.trend.SMAIndicator(close=df['close'], window=20).sma_indicator()
-        df['sma_50'] = ta.trend.SMAIndicator(close=df['close'], window=50).sma_indicator()
-        
-        # Bollinger Bands
-        bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
-        df['bb_lower'] = bb.bollinger_lband()
-        df['bb_upper'] = bb.bollinger_hband()
-        
-        # Volume moyen
-        df['volume_sma'] = df['volume'].rolling(window=20).mean()
-        df['volume_ratio'] = df['volume'] / df['volume_sma']
-        
-        # Range
-        df['range'] = df['high'] - df['low']
-        df['range_pct'] = (df['range'] / df['close']) * 100
+        if df is None or df.empty:
+            return df
+            
+        try:
+            import ta
+            
+            # RSI
+            df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
+            
+            # Moyennes mobiles
+            df['sma_20'] = ta.trend.SMAIndicator(close=df['close'], window=20).sma_indicator()
+            df['sma_50'] = ta.trend.SMAIndicator(close=df['close'], window=50).sma_indicator()
+            
+            # Bollinger Bands
+            bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+            df['bb_lower'] = bb.bollinger_lband()
+            df['bb_upper'] = bb.bollinger_hband()
+            
+            # Volume moyen
+            df['volume_sma'] = df['volume'].rolling(window=20).mean()
+            df['volume_ratio'] = df['volume'] / df['volume_sma']
+            
+            # Range
+            df['range'] = df['high'] - df['low']
+            df['range_pct'] = (df['range'] / df['close']) * 100
+            
+        except Exception as e:
+            print(f"Erreur ajout indicateurs: {e}")
         
         return df
     
@@ -170,10 +225,16 @@ class DataCollector:
         """
         Estime les liquidations basées sur volume et volatilité
         """
-        # Spike de volume + grande bougie = liquidations probables
-        df['volume_spike'] = df['volume_ratio'] > 3
-        df['price_spike'] = df['range_pct'] > df['range_pct'].rolling(50).mean() * 2
-        df['liquidation_signal'] = df['volume_spike'] & df['price_spike']
+        if df is None or df.empty:
+            return df
+            
+        try:
+            # Spike de volume + grande bougie = liquidations probables
+            df['volume_spike'] = df['volume_ratio'] > 3
+            df['price_spike'] = df['range_pct'] > df['range_pct'].rolling(50).mean() * 2
+            df['liquidation_signal'] = df['volume_spike'] & df['price_spike']
+        except:
+            pass
         
         return df
 
