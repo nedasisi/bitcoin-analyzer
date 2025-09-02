@@ -1,5 +1,5 @@
 """
-Module de collecte de données depuis Bitget ou alternatives
+Module de collecte de données depuis Bitget UNIQUEMENT
 """
 
 import ccxt
@@ -18,29 +18,29 @@ class DataCollector:
         self.init_exchange()
         
     def init_exchange(self):
-        """Initialise la connexion à l'exchange"""
+        """Initialise la connexion à Bitget UNIQUEMENT"""
         try:
-            # Utiliser Bitget via CCXT
+            # UNIQUEMENT Bitget - pas de Binance
             self.exchange = ccxt.bitget({
                 'enableRateLimit': True,
                 'options': {
-                    'defaultType': 'swap',  # Pour les futures perpetual
+                    'defaultType': 'spot',  # Pour le spot trading
                 }
             })
+            print("✅ Connecté à Bitget")
         except Exception as e:
             print(f"Erreur connexion Bitget: {e}")
-            # Fallback sur Binance si Bitget fail
-            self.exchange = ccxt.binance({
-                'enableRateLimit': True,
-                'options': {
-                    'defaultType': 'future',
-                }
-            })
+            # Pas de fallback - on utilise que Bitget
+            self.exchange = None
     
-    def fetch_ohlcv_data(self, symbol=SYMBOL, timeframe=None, since=None, limit=500):
+    def fetch_ohlcv_data(self, symbol='BTC/USDT', timeframe=None, since=None, limit=500):
         """
-        Récupère les données OHLCV
+        Récupère les données OHLCV depuis Bitget
         """
+        if not self.exchange:
+            print("❌ Exchange non initialisé")
+            return None
+            
         if timeframe is None:
             timeframe = self.timeframe
         try:
@@ -128,7 +128,7 @@ class DataCollector:
                 print(f"Erreur lecture cache: {e}")
         
         # Pas de cache ou erreur : récupérer toutes les données
-        print("📥 Téléchargement des données historiques...")
+        print("📥 Téléchargement des données historiques depuis Bitget...")
         df = self.fetch_ohlcv_data()
         
         if df is not None and not df.empty:

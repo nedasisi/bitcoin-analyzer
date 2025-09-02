@@ -1,118 +1,127 @@
 """
-Module pour récupérer l'heure exacte des bottoms avec données 1 minute
+Module pour trouver l'heure exacte des bottoms en utilisant Bitget
 """
 
 import ccxt
 import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
+import numpy as np
 import time
 
 class ExactBottomFinder:
-    def __init__(self, exchange_name='binance'):
-        """
-        Initialise le module de recherche exacte des bottoms
-        """
-        self.exchange = getattr(ccxt, exchange_name)({
+    def __init__(self):
+        """Initialise la connexion à Bitget uniquement"""
+        self.exchange = ccxt.bitget({
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'future' if exchange_name == 'binance' else 'swap'
+                'defaultType': 'spot'
             }
         })
-    
-    def get_exact_bottom_time(self, approximate_time, symbol='BTC/USDT:USDT', window_hours=4):
-        """
-        Récupère l'heure exacte d'un bottom en analysant les données 1m
         
-        Args:
-            approximate_time: Timestamp approximatif du bottom (depuis bougie 4h)
-            symbol: Symbole à analyser
-            window_hours: Fenêtre de recherche en heures (ex: 4 pour une bougie 4h)
-        
-        Returns:
-            dict avec l'heure exacte et le prix exact
-        """
+    def get_minute_data(self, start_time, end_time):
+        """Récupère les données 1 minute depuis Bitget"""
         try:
-            # Définir la fenêtre de recherche
-            start_time = approximate_time - timedelta(hours=window_hours/2)
-            end_time = approximate_time + timedelta(hours=window_hours/2)
+            # Convertir en timestamps
+            start_ts = int(start_time.timestamp() * 1000)
+            end_ts = int(end_time.timestamp() * 1000)
             
-            # Convertir en millisecondes pour l'API
-            since = int(start_time.timestamp() * 1000)
-            
-            # Récupérer les données 1 minute
-            ohlcv_1m = []
-            current_time = since
-            
-            while current_time < int(end_time.timestamp() * 1000):
-                batch = self.exchange.fetch_ohlcv(
-                    symbol=symbol,
-                    timeframe='1m',
-                    since=current_time,
-                    limit=1000  # Max par requête
-                )
-                
-                if not batch:
-                    break
-                
-                ohlcv_1m.extend(batch)
-                current_time = batch[-1][0] + 60000  # +1 minute
-                time.sleep(self.exchange.rateLimit / 1000)
+            # Récupérer données 1m
+            ohlcv = self.exchange.fetch_ohlcv(
+                symbol='BTC/USDT',
+                timeframe='1m',
+                since=start_ts,
+                limit=500  # Max 500 bougies
+            )
             
             # Convertir en DataFrame
-            df_1m = pd.DataFrame(ohlcv_1m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df_1m['timestamp'] = pd.to_datetime(df_1m['timestamp'], unit='ms')
-            df_1m.set_index('timestamp', inplace=True)
+            df = pd.DataFrame(
+                ohlcv,
+                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            )
+            df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('datetime', inplace=True)
             
-            # Trouver le minimum exact
-            min_idx = df_1m['low'].idxmin()
-            min_price = df_1m['low'].min()
+            # Filtrer pour la période exacte
+            df = df[(df.index >= start_time) & (df.index <= end_time)]
             
-            # Analyser la bougie du minimum pour être encore plus précis
-            min_candle = df_1m.loc[min_idx]
-            
-            # Estimer la seconde dans la minute
-            if min_candle['close'] < min_candle['open']:
-                # Bougie baissière - minimum probablement vers la fin
-                estimated_second = 45
-            elif abs(min_candle['low'] - min_candle['open']) < abs(min_candle['low'] - min_candle['close']):
-                # Minimum proche de l'open
-                estimated_second = 15
-            else:
-                # Minimum au milieu
-                estimated_second = 30
-            
-            exact_time = min_idx + timedelta(seconds=estimated_second)
-            
-            return {
-                'exact_time': exact_time,
-                'exact_price': min_price,
-                'candle_time': min_idx,
-                'precision': '±30 secondes',
-                'volume_at_bottom': min_candle['volume']
-            }
+            return df
             
         except Exception as e:
-            print(f"Erreur lors de la récupération des données 1m: {e}")
+            print(f"Erreur récupération données 1m depuis Bitget: {e}")
             return None
     
-    def get_multiple_exact_bottoms(self, bottoms_df, symbol='BTC/USDT:USDT'):
+    def get_exact_bottom_time(self, bottom_time, hours_before=2, hours_after=2):
         """
-        Récupère l'heure exacte pour plusieurs bottoms
+        Trouve l'heure exacte du bottom à la minute près
+        
+        Args:
+            bottom_time: datetime du bottom détecté sur 4H
+            hours_before: heures à analyser avant le bottom
+            hours_after: heures à analyser après le bottom
         """
-        exact_times = []
-        
-        for idx, row in bottoms_df.iterrows():
-            print(f"Recherche heure exacte pour {idx}...")
-            exact_data = self.get_exact_bottom_time(idx, symbol)
+        try:
+            # Définir la période à analyser
+            start_time = bottom_time - timedelta(hours=hours_before)
+            end_time = bottom_time + timedelta(hours=hours_after)
             
-            if exact_data:
-                exact_times.append({
-                    'original_time': idx,
-                    **exact_data
-                })
+            # Récupérer les données 1 minute
+            df_1m = self.get_minute_data(start_time, end_time)
             
-            # Pause pour respecter les limites API
-            time.sleep(1)
+            if df_1m is None or df_1m.empty:
+                print(f"Pas de données 1m pour {bottom_time}")
+                return None
+            
+            # Trouver le minimum
+            min_idx = df_1m['low'].idxmin()
+            min_price = df_1m.loc[min_idx, 'low']
+            
+            # Calculer quelques statistiques
+            price_at_bottom_candle = df_1m[df_1m.index.floor('4H') == bottom_time.floor('4H')]['low'].min() if not df_1m[df_1m.index.floor('4H') == bottom_time.floor('4H')].empty else None
+            
+            result = {
+                'exact_time': min_idx,
+                'exact_price': min_price,
+                'original_time': bottom_time,
+                'time_difference_minutes': (min_idx - bottom_time).total_seconds() / 60,
+                'price_at_4h_candle': price_at_bottom_candle,
+                'data_points': len(df_1m)
+            }
+            
+            return result
+            
+        except Exception as e:
+            print(f"Erreur dans get_exact_bottom_time: {e}")
+            return None
+    
+    def analyze_bottom_precision(self, bottoms_list, max_bottoms=10):
+        """
+        Analyse la précision temporelle d'une liste de bottoms
+        """
+        results = []
         
-        return pd.DataFrame(exact_times)
+        for i, bottom_time in enumerate(bottoms_list[:max_bottoms]):
+            print(f"Analyse bottom {i+1}/{min(len(bottoms_list), max_bottoms)}: {bottom_time}")
+            
+            result = self.get_exact_bottom_time(bottom_time)
+            if result:
+                results.append(result)
+            
+            # Pause pour respecter les limites
+            time.sleep(0.5)
+        
+        # Créer un DataFrame avec les résultats
+        if results:
+            df_results = pd.DataFrame(results)
+            
+            # Statistiques
+            stats = {
+                'mean_time_diff': df_results['time_difference_minutes'].mean(),
+                'median_time_diff': df_results['time_difference_minutes'].median(),
+                'std_time_diff': df_results['time_difference_minutes'].std(),
+                'max_time_diff': df_results['time_difference_minutes'].abs().max(),
+                'total_analyzed': len(results)
+            }
+            
+            return df_results, stats
+        
+        return None, None
