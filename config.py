@@ -20,7 +20,7 @@ TIMEFRAMES = {
 # Timeframe par défaut
 DEFAULT_TIMEFRAME = "4h"  # Retour à 4h comme avant
 TIMEFRAME = DEFAULT_TIMEFRAME
-START_DATE = "2019-07-01"
+START_DATE = "2010-07-01"  # CryptoCompare a des données depuis 2010
 
 # Paramètres de détection des bottoms (pour 4H)
 BOTTOM_PARAMS = {

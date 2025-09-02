@@ -19,12 +19,13 @@ def display_exact_time_tab_with_full_analysis(bottoms_tz, selected_tz, selected_
     
     st.header("🎯 Calcul de l'Heure Exacte des Bottoms (Précision 1 minute)")
     
-    # Message d'information sur les limitations
-    st.info("""
-    ⚠️ **Note importante sur les données**:
-    - **Bitget a des données minute à partir de 2021** uniquement
-    - **Pour les bottoms avant 2021**: L'heure exacte ne peut pas être calculée (affichage "N/A")
-    - **Pour les bottoms après 2021**: Calcul précis à la minute près disponible
+    # Message d'information sur les données disponibles
+    st.success("""
+    ✅ **Données minute complètes disponibles**:
+    - **Données depuis 2010** grâce à CryptoCompare API
+    - **Précision à la minute près** pour TOUS les bottoms
+    - **Volume exact** au moment du bottom
+    - **Agrégation multi-exchange** pour plus de précision
     """)
     
     # Tabs pour différents modes
@@ -136,10 +137,11 @@ def display_full_analysis(bottoms_tz, selected_tz, selected_tz_name, selected_ti
     
     with col3:
         if st.button("🗑️ Effacer le Cache", use_container_width=True):
-            if st.confirm("Êtes-vous sûr de vouloir effacer tout le cache?"):
-                analyzer = BatchExactTimeAnalyzer()
-                analyzer.clear_cache()
-                st.success("Cache effacé!")
+            from batch_analyzer import BatchExactTimeAnalyzer
+            analyzer = BatchExactTimeAnalyzer()
+            analyzer.clear_cache()
+            st.success("Cache effacé!")
+            st.rerun()
 
 def run_full_batch_analysis(bottoms_df, batch_size, delay, use_cache, selected_tz, selected_tz_name):
     """
@@ -391,10 +393,9 @@ def display_cache_management():
     
     with col3:
         if st.button("🗑️ Vider le cache", type="secondary"):
-            if st.confirm("Confirmer la suppression?"):
-                analyzer.clear_cache()
-                st.success("Cache vidé!")
-                st.rerun()
+            analyzer.clear_cache()
+            st.success("Cache vidé!")
+            st.rerun()
     
     # Afficher un échantillon du cache
     if stats['total_cached'] > 0:
